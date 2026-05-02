@@ -1,0 +1,35 @@
+{
+  "name": "smarters-tresorerie",
+  "version": "1.0.0",
+  "description": "Logiciel de gestion de trésorerie — SMARTERS GROUP",
+  "main": "main.js",
+  "author": "SMARTERS GROUP",
+  "scripts": {
+    "start": "electron .",
+    "build-win": "electron-builder --win --x64",
+    "build-mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.smarters.tresorerie",
+    "productName": "Smarters Trésorerie",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Smarters Trésorerie"
+    },
+    "files": ["main.js", "src/**/*", "assets/**/*", "node_modules/**/*"]
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3"
+  }
+}
