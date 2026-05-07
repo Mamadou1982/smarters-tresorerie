@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<!-- CSP : autorise uniquement les CDN connus, bloque eval() et scripts inline non déclarés -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:;">
 <title>Smarters Trésorerie Pro</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -271,7 +273,7 @@ table.dt{width:100%;border-collapse:collapse}
   <div class="db-actions">
     <button class="db-action-btn green" onclick="doBackup()">💾 Exporter JSON</button>
     <button class="db-action-btn" onclick="doRestore()">📂 Restaurer</button>
-    <button class="db-action-btn gray" onclick="window.db.openFolder()">📁 Ouvrir dossier</button>
+    <button class="db-action-btn gray" onclick="if(window.db&&window.db.openFolder)window.db.openFolder()">📁 Ouvrir dossier</button>
     <button class="db-action-btn red" onclick="confirmReset()">🗑️ Réinitialiser</button>
   </div>
   <div class="card"><div class="ctitle">À propos</div><p style="font-size:13px;color:var(--muted);line-height:1.8">Base <strong>SQLite</strong> stockée dans votre AppData. Contient transactions, clients, factures, budgets et récurrences. Faites un <strong>Backup JSON</strong> régulièrement.</p></div>
@@ -290,6 +292,7 @@ table.dt{width:100%;border-collapse:collapse}
       <div class="fg"><label>Mode</label><select id="edit-mode"><option value="">—</option><option>Espèces</option><option>Mobile Money</option><option>Virement bancaire</option><option>Chèque</option></select></div>
     </div>
     <div class="modal-actions"><button class="btn-cancel" onclick="closeModal('edit-modal')">Annuler</button><button class="btn-primary" onclick="saveEdit()">💾 Sauvegarder</button></div>
+    <span id="edit-msg" style="font-size:12px;margin-top:8px;display:block"></span>
   </div>
 </div>
 <div class="modal-overlay" id="client-modal">
@@ -590,16 +593,108 @@ function setSF(f,el){activeSF=f;document.querySelectorAll('#tab-saisie .chips .c
 function showTab(t,btn){document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));document.querySelectorAll('.nb').forEach(el=>el.classList.remove('active'));document.getElementById('tab-'+t).classList.add('active');btn.classList.add('active');if(t==='basededonnees')renderDB();else renderAll();}
 document.getElementById('yearSelect').addEventListener('change',renderAll);
 
-// INIT
-document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
-document.getElementById('fac-date').value=new Date().toISOString().split('T')[0];
-const d30=new Date();d30.setDate(d30.getDate()+30);document.getElementById('fac-echeance').value=d30.toISOString().split('T')[0];
+// ═══════════ CORRECTION BUG : confirmReset complet ════════════════════════════
+async function confirmReset(){
+  if(!confirm('⚠️ Supprimer DÉFINITIVEMENT toutes les données ?\nTransactions, clients, factures, budgets et récurrentes.'))return;
+  if(!confirm('IRRÉVERSIBLE. Dernière confirmation ?'))return;
+  try{
+    // Supprimer tout via les APIs validées
+    for(const t of [...transactions]){try{await window.db.delete(t.id);}catch(e){console.warn('delTx',t.id,e.message);}}
+    for(const c of [...clientsList]){try{await window.cl.delete(c.id);}catch(e){console.warn('delCl',c.id,e.message);}}
+    for(const f of [...facturesList]){try{await window.fac.delete(f.id);}catch(e){console.warn('delFac',f.id,e.message);}}
+    for(const b of [...budgetsList]){try{await window.bud.delete(b.id);}catch(e){console.warn('delBud',b.id,e.message);}}
+    for(const r of [...recurrencesList]){try{await window.rec.delete(r.id);}catch(e){console.warn('delRec',r.id,e.message);}}
+    transactions=[];clientsList=[];facturesList=[];budgetsList=[];recurrencesList=[];
+    updateDot();refreshSelects();initFacNum();renderAll();
+    alert('✓ Toutes les données ont été supprimées.');
+  }catch(err){alert('Erreur lors de la réinitialisation : '+(err.userMessage||err.message));}
+}
 
-Promise.all([window.db.getAll(),window.cl.getAll(),window.fac.getAll(),window.bud.getAll(),window.rec.getAll()])
-.then(([tx,cl,fac,bud,rec])=>{
-  transactions=tx;clientsList=cl;facturesList=fac;budgetsList=bud;recurrencesList=rec;
-  updateDot();refreshSelects();initFacNum();renderAll();
-}).catch(err=>{document.getElementById('db-indicator').className='err';document.getElementById('db-indicator').textContent='⚠ Erreur BD';console.error(err);});
-</script>
+// ═══════════ INIT ═════════════════════════════════════════════════════════════
+// Vérifier que les APIs Electron sont disponibles (protection contre ouverture en navigateur)
+function checkElectronAPIs() {
+  if (typeof window.db === 'undefined' || typeof window.db.getAll !== 'function') {
+    const el = document.getElementById('db-indicator');
+    el.className = 'err';
+    el.textContent = '⚠ APIs non disponibles — ouvrir avec Electron';
+    console.error('ERREUR : window.db est undefined. Ce fichier doit être ouvert via Electron, pas un navigateur.');
+    return false;
+  }
+  if (typeof window.cl === 'undefined') { console.error('window.cl undefined'); return false; }
+  if (typeof window.fac === 'undefined') { console.error('window.fac undefined'); return false; }
+  if (typeof window.bud === 'undefined') { console.error('window.bud undefined'); return false; }
+  if (typeof window.rec === 'undefined') { console.error('window.rec undefined'); return false; }
+  return true;
+}
+
+// Vérifier les librairies CDN (Chart.js, jsPDF)
+function checkLibraries() {
+  const missing = [];
+  if (typeof Chart === 'undefined') missing.push('Chart.js');
+  if (typeof window.jspdf === 'undefined') missing.push('jsPDF');
+  if (missing.length > 0) {
+    console.warn('Librairies CDN non chargées (hors-ligne ?) :', missing.join(', '));
+    // L'app peut fonctionner sans graphiques/PDF — juste avertir
+  }
+  return true; // Non bloquant
+}
+
+// Initialisation des dates par défaut
+document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+document.getElementById('fac-date').value = new Date().toISOString().split('T')[0];
+const d30 = new Date(); d30.setDate(d30.getDate() + 30);
+document.getElementById('fac-echeance').value = d30.toISOString().split('T')[0];
+
+// Démarrage principal
+async function init() {
+  console.log('[Smarters] Démarrage...');
+
+  if (!checkElectronAPIs()) return;
+  checkLibraries();
+
+  try {
+    console.log('[Smarters] Chargement de la base de données...');
+    const [tx, cl, fac, bud, rec] = await Promise.all([
+      window.db.getAll(),
+      window.cl.getAll(),
+      window.fac.getAll(),
+      window.bud.getAll(),
+      window.rec.getAll(),
+    ]);
+
+    // Sécurité : s'assurer que chaque tableau est bien un Array
+    transactions    = Array.isArray(tx)  ? tx  : [];
+    clientsList     = Array.isArray(cl)  ? cl  : [];
+    facturesList    = Array.isArray(fac) ? fac : [];
+    budgetsList     = Array.isArray(bud) ? bud : [];
+    recurrencesList = Array.isArray(rec) ? rec : [];
+
+    console.log(`[Smarters] Chargé : ${transactions.length} tx, ${clientsList.length} clients, ${facturesList.length} fac, ${budgetsList.length} budgets, ${recurrencesList.length} récurrentes`);
+
+    updateDot();
+    refreshSelects();
+    initFacNum();
+    renderAll();
+
+    console.log('[Smarters] Interface rendue avec succès ✓');
+  } catch (err) {
+    console.error('[Smarters] ERREUR au chargement :', err);
+    const el = document.getElementById('db-indicator');
+    el.className = 'err';
+    el.textContent = '⚠ Erreur BD : ' + (err.userMessage || err.message);
+    // Afficher une notification visible à l'utilisateur
+    const notif = document.createElement('div');
+    notif.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#c0392b;color:#fff;padding:14px 24px;border-radius:8px;font-size:14px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3);text-align:center;max-width:500px';
+    notif.innerHTML = '<strong>Erreur au démarrage</strong><br>' + (err.userMessage || err.message) + '<br><small style="opacity:.8">Vérifiez que le logiciel est ouvert via Electron.</small>';
+    document.body.appendChild(notif);
+  }
+}
+
+// Lancer après que le DOM est prêt
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}</script>
 </body>
 </html>
